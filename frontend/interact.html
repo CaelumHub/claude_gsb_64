@@ -59,6 +59,24 @@
         </div>
       </div>
 
+      <div class="card" id="dmsPanel" style="display:none; margin-top:16px;">
+        <div class="flex">
+          <h2 style="margin:0;">⏳ 活跃度倒计时（失联继承托管）</h2>
+          <span class="badge gray" id="dmsStateBadge"></span>
+          <div class="spacer"></div>
+          <button class="btn ghost sm" onclick="refreshDms()">刷新</button>
+        </div>
+        <div style="margin-top:12px; background:var(--panel-2); border-radius:8px; height:10px; overflow:hidden;">
+          <div id="dmsProgress" style="height:100%; width:0%; background:var(--green); transition:width .4s;"></div>
+        </div>
+        <div class="kv" id="dmsBody" style="margin-top:12px;"></div>
+        <div class="flex" style="margin-top:12px;">
+          <button class="btn primary sm" onclick="dmsAction('check_in')">🔁 活跃签到 (check_in)</button>
+          <button class="btn green sm" onclick="dmsAction('claim')">💰 继承人领取 (claim)</button>
+          <span class="hint">签到 / 领取均使用上方「调用账户」选中的钱包签名，写入后自动出块。</span>
+        </div>
+      </div>
+
       <div class="grid cols-2" style="margin-top:16px;">
         <div class="card">
           <h2>合约代码</h2>
@@ -126,6 +144,7 @@ async function selectContract(addr) {
   $("#codeView").textContent = c.code || "";
   renderFunctions(c.code);
   renderEvents(c.events || []);
+  updateDmsPanel(c);
 }
 
 function renderFunctions(code) {
@@ -165,6 +184,97 @@ function parseArgs() {
     const v = JSON.parse(raw);
     return Array.isArray(v) ? v : [v];
   } catch (e) { return null; }
+}
+
+/* ---------- 活跃度倒计时面板（失联继承托管合约） ---------- */
+let dmsTimer = null;
+let dmsAvgInterval = 0;
+
+function isDmsContract(code) {
+  return code && /def\s+check_in\s*\(/.test(code)
+    && /def\s+claim\s*\(/.test(code) && /def\s+time_remaining\s*\(/.test(code);
+}
+
+async function updateDmsPanel(c) {
+  if (dmsTimer) { clearInterval(dmsTimer); dmsTimer = null; }
+  if (!isDmsContract(c.code)) {
+    $("#dmsPanel").style.display = "none";
+    return;
+  }
+  $("#dmsPanel").style.display = "";
+  if (!dmsAvgInterval) {
+    try {
+      const d = await API.get("/api/stats/overview");
+      dmsAvgInterval = Number(d.avg_block_interval) || 0;
+    } catch (e) { /* 无统计时仅显示区块数 */ }
+  }
+  await refreshDms();
+  dmsTimer = setInterval(refreshDms, 5000);
+}
+
+async function refreshDms() {
+  if (!current) return;
+  const sender = wallets.length ? wallets[Number($("#callFrom").value || 0)].address : "0x0";
+  try {
+    const d = await API.post(`/api/contract/${current}/call`,
+      { function: "status", args: [], sender });
+    if (!d.ok) {
+      $("#dmsBody").innerHTML = `<span class="badge red">✗ ${esc(d.error)}</span>`;
+      return;
+    }
+    renderDms(d.return);
+  } catch (e) { /* 节点暂不可达，下轮重试 */ }
+}
+
+function renderDms(s) {
+  if (!s) return;
+  const badge = $("#dmsStateBadge");
+  if (s.claimed) {
+    badge.className = "badge gray"; badge.textContent = "已被领取，托管结束";
+  } else if (s.claimable) {
+    badge.className = "badge red"; badge.textContent = "已到期，继承人可领取";
+  } else {
+    badge.className = "badge green"; badge.textContent = "活跃中";
+  }
+  const pct = s.period > 0
+    ? Math.min(100, Math.max(0, (s.period - s.remaining) / s.period * 100)) : 100;
+  const bar = $("#dmsProgress");
+  bar.style.width = pct + "%";
+  bar.style.background = s.claimed ? "var(--muted)"
+    : (s.claimable ? "var(--red)" : (pct > 75 ? "var(--amber)" : "var(--green)"));
+  const eta = (!s.claimed && !s.claimable && dmsAvgInterval > 0)
+    ? "（约 " + humanize(s.remaining * dmsAvgInterval) + "）" : "";
+  $("#dmsBody").innerHTML = `
+    <dt>剩余时间</dt><dd><b>${s.remaining}</b> 个区块${esc(eta)}</dd>
+    <dt>倒计时区间</dt><dd>上次活跃 #${s.last_active} → 到期 #${s.deadline}（当前 #${s.height}，期限 ${s.period} 区块）</dd>
+    <dt>托管余额</dt><dd>${fmt.amount(s.balance)} LC</dd>
+    <dt>持有人</dt><dd class="addr">${esc(s.owner)}</dd>
+    <dt>继承人</dt><dd class="addr">${esc(s.heir)}</dd>`;
+}
+
+function humanize(sec) {
+  sec = Math.round(sec);
+  if (sec < 60) return sec + " 秒";
+  if (sec < 3600) return Math.floor(sec / 60) + " 分钟";
+  if (sec < 86400) return (sec / 3600).toFixed(1) + " 小时";
+  return (sec / 86400).toFixed(1) + " 天";
+}
+
+async function dmsAction(fn) {
+  if (!current) return;
+  const idx = Number($("#callFrom").value || 0);
+  if (!wallets[idx]) return toast("请先生成钱包", "err");
+  const sender = wallets[idx].address;
+  try {
+    const d = await API.post(`/api/contract/${current}/invoke`,
+      { function: fn, args: [], sender, value: 0, mine: true });
+    toast(d.ok ? "已提交并出块: " + fmt.hash(d.txid, 8) : d.reason, d.ok ? "ok" : "err");
+    if (d.ok) {
+      await new Promise(r => setTimeout(r, 600));
+      await selectContract(current);
+      renderTopbar();
+    }
+  } catch (e) { toast(e.message, "err"); }
 }
 
 async function callRead() {

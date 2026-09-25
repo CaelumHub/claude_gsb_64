@@ -154,6 +154,107 @@ def amount():
 ''',
     },
     {
+        "name": "dead_mans_switch",
+        "title": "活跃度资金托管（失联继承）",
+        "category": "金融",
+        "description": "持有人存入资金并指定继承人与活跃期限（区块数）；持有人需定期签到重置倒计时，"
+                       "超时未活跃则继承人可领取全部资金，被领取前持有人随时可签到保住资金。",
+        "constructor": [
+            {"name": "heir", "type": "address", "desc": "继承人地址"},
+            {"name": "period", "type": "int", "desc": "活跃期限（区块数），每次活跃后重置"},
+        ],
+        "functions": [
+            {"name": "deposit", "desc": "存入资金（附带 value）；持有人本人存入会重置倒计时", "params": []},
+            {"name": "check_in", "desc": "持有人活跃签到，倒计时重置为完整期限", "params": []},
+            {"name": "claim", "desc": "继承人在倒计时到期后领取全部资金", "params": []},
+            {"name": "time_remaining", "desc": "查询距离可领取还剩多少区块", "params": []},
+            {"name": "can_claim", "desc": "查询继承人当前是否可领取", "params": []},
+            {"name": "status", "desc": "查询托管整体状态（倒计时、余额、是否可领取等）", "params": []},
+        ],
+        "source": '''# 活跃度资金托管模板（失联继承 / 死手开关）
+# 持有人存入资金并指定继承人与活跃期限（以区块数计）。
+# 持有人每次活跃操作（签到或本人存入）都会把倒计时重置回完整期限；
+# 一旦超过期限没有任何活跃，继承人即可领取合约内全部资金；
+# 只要资金还没被领走，持有人随时可以重新活跃、继续保住资金。
+
+def init(heir, period):
+    require(state.get("owner") is None, "合约已初始化")
+    period = int(period)
+    require(period > 0, "活跃期限必须为正数")
+    heir = str(heir)
+    require(heir != "", "继承人地址不能为空")
+    require(heir != msg.sender, "继承人不能是持有人本人")
+    state["owner"] = msg.sender
+    state["heir"] = heir
+    state["period"] = period
+    state["last_active"] = block_height
+    state["claimed"] = False
+    emit("Created", owner=msg.sender, heir=heir, period=period)
+
+def _touch():
+    # 记录一次持有人活跃：倒计时重置回完整期限。
+    state["last_active"] = block_height
+
+def deposit():
+    require(state.get("owner") is not None, "合约尚未初始化")
+    require(state["claimed"] is False, "资金已被领取，托管已结束")
+    require(msg.value > 0, "存入金额必须为正")
+    # 持有人本人存入视为活跃；他人代存不影响倒计时。
+    if msg.sender == state["owner"]:
+        _touch()
+    emit("Deposited", by=msg.sender, amount=msg.value)
+
+def check_in():
+    require(state.get("owner") is not None, "合约尚未初始化")
+    require(msg.sender == state["owner"], "只有持有人可以活跃签到")
+    require(state["claimed"] is False, "资金已被领取，托管已结束")
+    _touch()
+    emit("CheckedIn", owner=msg.sender, height=block_height,
+         deadline=state["last_active"] + state["period"])
+
+def claim():
+    require(state.get("owner") is not None, "合约尚未初始化")
+    require(msg.sender == state["heir"], "只有继承人可以领取")
+    require(state["claimed"] is False, "资金已被领取")
+    deadline = state["last_active"] + state["period"]
+    require(block_height >= deadline, "活跃期限未到，暂不能领取")
+    amount = this_balance()
+    require(amount > 0, "合约内没有可领取的资金")
+    state["claimed"] = True
+    transfer(state["heir"], amount)
+    emit("Claimed", heir=state["heir"], amount=amount, height=block_height)
+
+def time_remaining():
+    deadline = state.get("last_active", 0) + state.get("period", 0)
+    remaining = deadline - block_height
+    return remaining if remaining > 0 else 0
+
+def can_claim():
+    if state.get("claimed", True):
+        return False
+    if this_balance() <= 0:
+        return False
+    return block_height >= state.get("last_active", 0) + state.get("period", 0)
+
+def status():
+    deadline = state.get("last_active", 0) + state.get("period", 0)
+    remaining = deadline - block_height
+    return {
+        "owner": state.get("owner"),
+        "heir": state.get("heir"),
+        "period": state.get("period", 0),
+        "last_active": state.get("last_active", 0),
+        "deadline": deadline,
+        "height": block_height,
+        "remaining": remaining if remaining > 0 else 0,
+        "expired": remaining <= 0,
+        "claimable": can_claim(),
+        "balance": this_balance(),
+        "claimed": state.get("claimed", False),
+    }
+''',
+    },
+    {
         "name": "auction",
         "title": "拍卖合约",
         "category": "金融",
