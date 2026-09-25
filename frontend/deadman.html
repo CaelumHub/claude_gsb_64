@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>活跃倒计时托管 · LightChain</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside id="sidebar"></aside>
+  <div class="main">
+    <header id="topbar"></header>
+    <main class="content">
+      <div class="page-head">
+        <h1>活跃倒计时托管</h1>
+        <p>持有人定期活跃以重置倒计时；到期未活跃，继承人即可领取全部资金。</p>
+      </div>
+
+      <div class="card">
+        <div class="flex" style="flex-wrap:wrap;gap:10px;">
+          <h2 style="margin:0;">托管合约</h2>
+          <select id="contractSelect" style="max-width:300px;" onchange="selectContract(this.value)"></select>
+          <button class="btn ghost sm" onclick="refreshContracts()">刷新</button>
+          <div class="spacer"></div>
+          <label class="small muted" style="display:flex;align-items:center;gap:4px;">
+            操作账户</label>
+          <select id="walletSelect" style="max-width:220px;" onchange="renderAll()"></select>
+          <span class="badge gray" id="roleBadge">—</span>
+          <label class="small muted" style="display:flex;align-items:center;gap:4px;">
+            <input type="checkbox" id="autoMineChk" checked style="width:auto;"> 写入后立即出块</label>
+        </div>
+      </div>
+
+      <div id="mainPanel" style="display:none;">
+        <div class="card" style="margin-top:16px;">
+          <div class="flex">
+            <h2 style="margin:0;">⏳ 距离继承人可领取</h2>
+            <div class="spacer"></div>
+            <span class="badge green" id="stateBadge">活跃中</span>
+          </div>
+          <div style="display:flex;align-items:baseline;gap:14px;margin:14px 0 6px;">
+            <span id="cdBlocks" style="font-size:40px;font-weight:700;font-family:var(--mono);">—</span>
+            <span class="muted">个区块</span>
+            <span id="cdTime" class="muted" style="font-size:16px;">≈ —</span>
+          </div>
+          <div style="height:10px;border-radius:6px;background:var(--panel-2,#222);overflow:hidden;border:1px solid var(--border);">
+            <div id="cdBar" style="height:100%;width:0%;background:var(--green);transition:width .5s;"></div>
+          </div>
+          <div class="grid cols-4" style="margin-top:16px;">
+            <div class="stat"><div class="label">当前高度</div><div class="value small" id="stHeight">—</div></div>
+            <div class="stat"><div class="label">上次活跃高度</div><div class="value small" id="stLastActive">—</div></div>
+            <div class="stat"><div class="label">到期高度</div><div class="value small" id="stDeadline">—</div></div>
+            <div class="stat"><div class="label">活跃期限</div><div class="value small" id="stPeriod">—</div></div>
+          </div>
+          <div class="grid cols-4" style="margin-top:12px;">
+            <div class="stat accent"><div class="label">持有人</div><div class="value small addr" id="stOwner">—</div></div>
+            <div class="stat purple"><div class="label">继承人</div><div class="value small addr" id="stHeir">—</div></div>
+            <div class="stat green"><div class="label">托管金额</div><div class="value small mono-num" id="stAmount">—</div></div>
+            <div class="stat amber"><div class="label">合约余额</div><div class="value small mono-num" id="stBalance">—</div></div>
+          </div>
+        </div>
+
+        <div class="grid cols-2" style="margin-top:16px;">
+          <div class="card">
+            <h2>持有人操作 <span class="hint" id="ownerHint"></span></h2>
+            <div class="row">
+              <div class="field grow"><label>存入金额</label>
+                <input id="depositAmount" type="number" min="0" step="any" placeholder="0"></div>
+              <div class="field" style="align-self:end;">
+                <button class="btn green owner-op" onclick="doDeposit()">💰 存入并重置倒计时</button></div>
+            </div>
+            <div class="flex" style="margin-top:4px;">
+              <button class="btn primary owner-op" onclick="doPing()">💓 活跃签到（重置倒计时）</button>
+            </div>
+            <hr class="divider">
+            <div class="row">
+              <div class="field grow"><label>取回金额</label>
+                <input id="withdrawAmount" type="number" min="0" step="any" placeholder="0"></div>
+              <div class="field" style="align-self:end;">
+                <button class="btn owner-op" onclick="doWithdraw()">↩ 取回</button></div>
+            </div>
+            <div class="row">
+              <div class="field grow"><label>新继承人地址</label>
+                <input id="newHeir" class="mono" placeholder="0x..."></div>
+              <div class="field" style="align-self:end;">
+                <button class="btn owner-op" onclick="doChangeHeir()">✏ 修改继承人</button></div>
+            </div>
+            <div class="row">
+              <div class="field grow"><label>新活跃期限（区块数）</label>
+                <input id="newPeriod" type="number" min="1" step="1" placeholder="例如 100"></div>
+              <div class="field" style="align-self:end;">
+                <button class="btn owner-op" onclick="doSetPeriod()">✏ 修改期限</button></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>继承人操作 <span class="hint" id="heirHint"></span></h2>
+            <p class="hint" style="margin:6px 0 12px;">
+              倒计时归零（当前高度 ≥ 到期高度）后，继承人可领取合约内全部资金；
+              只要资金尚未被领走，持有人重新活跃即可继续保住资金。</p>
+            <button class="btn amber" id="claimBtn" onclick="doClaim()" disabled>🪙 领取全部资金</button>
+            <div id="claimNote" class="small muted" style="margin-top:10px;"></div>
+            <hr class="divider">
+            <div class="section-title">最近事件</div>
+            <div id="eventList" style="max-height:220px;overflow:auto;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" id="emptyPanel" style="margin-top:16px;display:none;">
+        <div class="empty"><div class="big">⏳</div>
+          没有找到活跃倒计时托管合约。<br>
+          <span class="small">可前往 <a href="templates.html">合约模板库</a>
+          选择「活跃倒计时托管（继承人合约）」一键部署。</span>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="/static/js/api.js"></script>
+<script src="/static/js/app.js"></script>
+<script>
+window.PAGE = "deadman";
+let wallets = [];
+let contracts = [];
+let current = null;
+let lastStatus = null;      // 最近一次 status() 返回
+let polledAt = 0;           // 客户端时间戳（ms）
+let blockInterval = 3.0;    // 出块间隔（秒），用于把区块数换算成时间
+let nodeMining = true;      // 节点是否正在出块（暂停出块时链上倒计时也暂停）
+
+async function init() {
+  await loadWallets();
+  await loadConfig();
+  await refreshContracts();
+  pollStatus(6000);
+  setInterval(pollContract, 2000);   // 链上真值轮询
+  setInterval(tick, 1000);           // 本地倒计时插值
+}
+
+async function loadWallets() {
+  const d = await API.get("/api/wallet/list");
+  wallets = d.wallets;
+  $("#walletSelect").innerHTML = wallets.map((w, i) =>
+    `<option value="${i}">${esc(w.label || fmt.addr(w.address, 6))}</option>`).join("");
+}
+
+async function loadConfig() {
+  try {
+    const d = await API.get("/api/network/config");
+    if (d.mining_interval > 0) blockInterval = d.mining_interval;
+  } catch (e) { /* 用默认值 */ }
+}
+
+function isDeadman(c) {
+  return c.code && c.code.includes("def ping(") &&
+         c.code.includes("def claim(") && c.code.includes("def time_remaining(");
+}
+
+async function refreshContracts() {
+  const d = await API.get("/api/contract/list");
+  contracts = d.contracts.filter(isDeadman);
+  const sel = $("#contractSelect");
+  if (!contracts.length) {
+    sel.innerHTML = `<option value="">无托管合约</option>`;
+    current = null;
+    $("#mainPanel").style.display = "none";
+    $("#emptyPanel").style.display = "";
+    return;
+  }
+  sel.innerHTML = contracts.map(c =>
+    `<option value="${c.address}">${fmt.addr(c.address, 10)}</option>`).join("");
+  const qAddr = new URLSearchParams(location.search).get("addr");
+  if (qAddr && contracts.some(c => c.address === qAddr)) sel.value = qAddr;
+  $("#emptyPanel").style.display = "none";
+  $("#mainPanel").style.display = "";
+  selectContract(sel.value);
+}
+
+async function selectContract(addr) {
+  if (!addr) return;
+  current = addr;
+  lastStatus = null;
+  await pollContract();
+  await refreshEvents();
+}
+
+function myAddress() {
+  const i = Number($("#walletSelect").value || 0);
+  return wallets[i] ? wallets[i].address : null;
+}
+
+async function pollContract() {
+  if (!current) return;
+  try {
+    const st = await API.get("/api/node/status");
+    nodeMining = !!st.mining;
+  } catch (e) { /* 节点暂时不可达 */ }
+  try {
+    const d = await API.post(`/api/contract/${current}/call`,
+      { function: "status", args: [], sender: myAddress() || "0x0" });
+    if (d.ok && d.return) {
+      lastStatus = d.return;
+      polledAt = Date.now();
+      renderAll();
+    }
+  } catch (e) { /* 下个周期重试 */ }
+}
+
+async function refreshEvents() {
+  if (!current) return;
+  try {
+    const d = await API.get("/api/contract/" + current);
+    renderEvents(d.events || []);
+  } catch (e) { /* ignore */ }
+}
+
+function tick() { renderCountdown(); }
+
+function estRemainingBlocks() {
+  if (!lastStatus) return null;
+  if (lastStatus.claimed) return 0;
+  if (!nodeMining) return lastStatus.remaining;  // 暂停出块时链上倒计时不走
+  const elapsed = (Date.now() - polledAt) / 1000;
+  const est = lastStatus.remaining - elapsed / blockInterval;
+  return est > 0 ? est : 0;
+}
+
+function fmtDur(sec) {
+  if (sec <= 0) return "0 秒";
+  const parts = [];
+  const d = Math.floor(sec / 86400); sec -= d * 86400;
+  const h = Math.floor(sec / 3600); sec -= h * 3600;
+  const m = Math.floor(sec / 60); sec -= m * 60;
+  if (d) parts.push(d + " 天");
+  if (h) parts.push(h + " 小时");
+  if (m) parts.push(m + " 分");
+  parts.push(Math.floor(sec) + " 秒");
+  return parts.slice(0, 2).join(" ");
+}
+
+function renderAll() {
+  renderCountdown();
+  renderStats();
+  renderRole();
+}
+
+function renderCountdown() {
+  if (!lastStatus) return;
+  const s = lastStatus;
+  const est = estRemainingBlocks();
+  const expired = !s.claimed && est <= 0;
+  $("#cdBlocks").textContent = s.claimed ? "0" : Math.ceil(est);
+  $("#cdTime").textContent = s.claimed ? "资金已被领取"
+    : (est > 0 ? "≈ " + fmtDur(est * blockInterval) + (nodeMining ? "" : "（出块暂停）")
+               : "已到期，继承人可领取");
+  const pct = s.period > 0 ? Math.min(100, Math.max(0,
+      100 * (1 - (s.claimed ? 0 : est) / s.period))) : 100;
+  const bar = $("#cdBar");
+  bar.style.width = pct + "%";
+  bar.style.background = s.claimed ? "var(--muted)"
+    : expired ? "var(--red)"
+    : (est / s.period < 0.3 ? "var(--amber)" : "var(--green)");
+  const badge = $("#stateBadge");
+  if (s.claimed) { badge.className = "badge gray"; badge.textContent = "已被领取"; }
+  else if (expired) { badge.className = "badge red"; badge.textContent = "已到期 · 继承人可领取"; }
+  else { badge.className = "badge green"; badge.textContent = "活跃中"; }
+}
+
+function renderStats() {
+  if (!lastStatus) return;
+  const s = lastStatus;
+  $("#stHeight").textContent = "#" + s.height;
+  $("#stLastActive").textContent = "#" + s.last_active;
+  $("#stDeadline").textContent = "#" + s.deadline;
+  $("#stPeriod").textContent = s.period + " 区块";
+  $("#stOwner").textContent = fmt.addr(s.owner, 6);
+  $("#stOwner").title = s.owner || "";
+  $("#stHeir").textContent = fmt.addr(s.heir, 6);
+  $("#stHeir").title = s.heir || "";
+  $("#stAmount").textContent = fmt.amount(s.amount) + " LC";
+  $("#stBalance").textContent = fmt.amount(s.balance) + " LC";
+}
+
+function renderRole() {
+  if (!lastStatus) return;
+  const me = myAddress();
+  const isOwner = me && me === lastStatus.owner;
+  const isHeir = me && me === lastStatus.heir;
+  const badge = $("#roleBadge");
+  if (isOwner) { badge.className = "badge blue"; badge.textContent = "我是持有人"; }
+  else if (isHeir) { badge.className = "badge purple"; badge.textContent = "我是继承人"; }
+  else { badge.className = "badge gray"; badge.textContent = "旁观者"; }
+  $$(".owner-op").forEach(b => b.disabled = !isOwner || lastStatus.claimed);
+  $("#ownerHint").textContent = isOwner ? "" : "（当前账户不是持有人，仅可查看）";
+  const canClaim = isHeir && !lastStatus.claimed &&
+    (lastStatus.expired || estRemainingBlocks() <= 0);
+  $("#claimBtn").disabled = !canClaim;
+  $("#heirHint").textContent = isHeir ? "" : "（当前账户不是继承人）";
+  $("#claimNote").textContent = lastStatus.claimed
+    ? "资金已被继承人领取，托管结束。"
+    : canClaim ? "期限已到，可以领取。"
+    : isHeir ? "期限未到，暂不能领取。" : "切换到继承人账户后可操作。";
+}
+
+function renderEvents(events) {
+  const box = $("#eventList");
+  if (!events.length) { box.innerHTML = `<div class="empty">暂无事件</div>`; return; }
+  box.innerHTML = events.slice().reverse().slice(0, 20).map(e => `
+    <div style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;">
+      <div class="flex"><span class="badge purple">${esc(e.event)}</span>
+        <span class="spacer"></span>
+        <span class="muted small">高度 #${e.height}</span></div>
+      <div class="small muted mono" style="margin-top:4px;">${esc(JSON.stringify(e.data))}</div>
+    </div>`).join("");
+}
+
+async function invoke(fn, args, value) {
+  const me = myAddress();
+  if (!me) return toast("请先在钱包页面生成账户", "err");
+  try {
+    const d = await API.post(`/api/contract/${current}/invoke`,
+      { function: fn, args: args || [], sender: me, value: value || 0,
+        mine: $("#autoMineChk").checked });
+    if (!d.ok) return toast(d.reason || "调用失败", "err");
+    toast("交易已提交: " + fmt.hash(d.txid, 8), "ok");
+    await new Promise(r => setTimeout(r, 600));
+    await pollContract();
+    await refreshEvents();
+    renderTopbar();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+function doDeposit() {
+  const v = parseFloat($("#depositAmount").value || 0);
+  if (!(v > 0)) return toast("请输入正的存入金额", "err");
+  invoke("deposit", [], v);
+}
+function doPing() { invoke("ping", [], 0); }
+function doWithdraw() {
+  const v = parseFloat($("#withdrawAmount").value || 0);
+  if (!(v > 0)) return toast("请输入正的取回金额", "err");
+  invoke("withdraw", [v], 0);
+}
+function doChangeHeir() {
+  const h = $("#newHeir").value.trim();
+  if (!h) return toast("请输入新继承人地址", "err");
+  invoke("change_heir", [h], 0);
+}
+function doSetPeriod() {
+  const p = parseInt($("#newPeriod").value);
+  if (!(p > 0)) return toast("请输入正的期限（区块数）", "err");
+  invoke("set_period", [p], 0);
+}
+function doClaim() { invoke("claim", [], 0); }
+
+document.addEventListener("DOMContentLoaded", init);
+</script>
+</body>
+</html>

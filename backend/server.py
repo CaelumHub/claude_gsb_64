@@ -20,7 +20,7 @@ from .templates import template_catalog, get_template, TEMPLATES
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "frontend")
 PAGES = ["index", "wallet", "txpool", "explorer", "deploy", "interact",
-         "nodes", "network", "stats", "admin", "templates"]
+         "nodes", "network", "stats", "admin", "templates", "deadman"]
 
 
 def _json(payload, status=200):
